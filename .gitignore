@@ -1,0 +1,17 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+# IDE
+.idea/
+*.swp
+
+# Downloaded crawl/sitemap caches
+data/raw/
+data/processed/
+
+# Model / tool caches
+*.joblib
+~/.cache/
