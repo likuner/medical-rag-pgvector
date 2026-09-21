@@ -1,7 +1,8 @@
 """Embedding backends.
 
-Primary backend: sentence-transformers (semantic vectors, works for ZH+EN).
-Fallback backend: scikit-learn TF-IDF + LSA. Both produce a fixed-width,
+Primary backend: GLM (Zhipu AI) embedding API — remote semantic vectors, no
+local ML stack needed. Alternative local backends: sentence-transformers
+(semantic) and scikit-learn TF-IDF + LSA. All produce a fixed-width,
 L2-normalised numpy float32 vector so the pgvector table stays consistent.
 """
 from __future__ import annotations
@@ -10,6 +11,7 @@ import json
 import logging
 import os
 import re
+import time
 
 import numpy as np
 
@@ -65,11 +67,14 @@ def _l2_normalize(vecs: np.ndarray) -> np.ndarray:
 class Embedder:
     """Pluggable text->vector embedder.
 
-    ``backend = "sentence-transformers"`` (default) loads a HuggingFace model.
+    ``backend = "glm"`` calls the Zhipu AI embedding API (needs GLM_API_KEY).
+    ``backend = "sentence-transformers"`` loads a HuggingFace model.
     ``backend = "tfidf"`` uses TF-IDF + LSA; call :meth:`fit` first on the bulk
-    of documents so vocabulary is known. ``backend = "auto"`` tries the model
-    and gracefully falls back to TF-IDF.
+    of documents so vocabulary is known. ``backend = "auto"`` prefers GLM when
+    a key is configured, then tries the local model and falls back to TF-IDF.
     """
+
+    _GLM_MAX_ATTEMPTS = 4
 
     def __init__(self, config: EmbeddingConfig):
         self.cfg = config
@@ -78,14 +83,25 @@ class Embedder:
         self._model = None
         self._vectorizer = None
         self._svd = None
+        self._requests = None  # module handle used by the glm backend
 
     # ------------------------------------------------------------------ load
     def load(self) -> "Embedder":
-        if self.backend in {"sentence-transformers", "st", "sbert", "semantic"}:
+        if self.backend in {"glm", "zhipu", "zhipuai"}:
+            self.backend = "glm"
+            self._load_glm()
+        elif self.backend in {"sentence-transformers", "st", "sbert", "semantic"}:
             self._load_sbert()
         elif self.backend in {"tfidf", "lsa", "bow"}:
             self.backend = "tfidf"
-        else:  # auto
+        else:  # auto: remote GLM first, then local model, then TF-IDF.
+            if self.cfg.glm_api_key:
+                try:
+                    self._load_glm()
+                    self.backend = "glm"
+                    return self
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("GLM embeddings unavailable (%s); trying local backends.", exc)
             try:
                 self._load_sbert()
                 self.backend = "sentence-transformers"
@@ -93,6 +109,66 @@ class Embedder:
                 log.warning("SentenceTransformers unavailable (%s); using TF-IDF.", exc)
                 self.backend = "tfidf"
         return self
+
+    def _load_glm(self) -> None:
+        if not self.cfg.glm_api_key:
+            raise RuntimeError(
+                "GLM backend requires GLM_API_KEY (set the environment variable "
+                "or put it in a git-ignored .env file; never commit the key)."
+            )
+        import requests
+
+        self._requests = requests
+        # Probe the API once so the schema's vector(N) column is created with
+        # the dimension the service actually returns.
+        try:
+            vecs = self._glm_request(["dimension probe"])
+        except Exception:
+            # The requested `dimensions` value may be unsupported by the
+            # model; retry with the model default and adopt whatever comes back.
+            self.cfg.dim = 0
+            vecs = self._glm_request(["dimension probe"])
+        self.dim = int(vecs.shape[1])
+        if self.dim != self.cfg.dim:
+            log.info("GLM embedding dim is %d (config said %d); using %d.",
+                     self.dim, self.cfg.dim, self.dim)
+            self.cfg.dim = self.dim
+
+    def _glm_request(self, texts: list[str]) -> np.ndarray:
+        """One POST to the GLM embeddings endpoint; retries transient errors."""
+        requests = self._requests
+        headers = {
+            "Authorization": f"Bearer {self.cfg.glm_api_key}",
+            "Content-Type": "application/json",
+        }
+        payload: dict = {"model": self.cfg.glm_model, "input": texts}
+        if self.cfg.dim > 0:
+            payload["dimensions"] = self.cfg.dim
+        last_exc: Exception | None = None
+        for attempt in range(self._GLM_MAX_ATTEMPTS):
+            try:
+                r = requests.post(
+                    self.cfg.glm_base_url,
+                    headers=headers,
+                    json=payload,
+                    timeout=60,
+                )
+                if r.status_code == 429 or r.status_code >= 500:
+                    raise requests.RequestException(
+                        f"HTTP {r.status_code}: {r.text[:200]}"
+                    )
+                if r.status_code >= 400:
+                    raise RuntimeError(
+                        f"GLM embeddings HTTP {r.status_code}: {r.text[:300]}"
+                    )
+                data = r.json()["data"]
+                data.sort(key=lambda d: d["index"])
+                return np.asarray([d["embedding"] for d in data], dtype=np.float32)
+            except (requests.RequestException, KeyError, ValueError) as exc:
+                last_exc = exc
+                if attempt < self._GLM_MAX_ATTEMPTS - 1:
+                    time.sleep(1.5 * (attempt + 1))
+        raise last_exc if last_exc else RuntimeError("GLM embeddings failed")
 
     def _load_sbert(self) -> None:
         from sentence_transformers import SentenceTransformer
@@ -143,7 +219,9 @@ class Embedder:
     def embed(self, texts: list[str], is_query: bool = False) -> np.ndarray:
         if not texts:
             return np.zeros((0, self.dim), dtype=np.float32)
-        if self.backend == "sentence-transformers":
+        if self.backend == "glm":
+            vecs = self._embed_glm(texts)
+        elif self.backend == "sentence-transformers":
             vecs = self._embed_sbert(texts, is_query=is_query)
         else:
             vecs = self._embed_tfidf(texts)
@@ -164,6 +242,24 @@ class Embedder:
         )
         return np.asarray(vecs, dtype=np.float32)
 
+    def _embed_glm(self, texts: list[str]) -> np.ndarray:
+        # The GLM API is symmetric: no bge-style query instruction prefix.
+        out = np.zeros((len(texts), self.dim), dtype=np.float32)
+        bs = max(1, self.cfg.glm_batch_size)
+        for i in range(0, len(texts), bs):
+            batch = texts[i : i + bs]
+            vecs = self._glm_request(batch)
+            if vecs.shape[0] != len(batch):
+                raise RuntimeError(
+                    f"GLM returned {vecs.shape[0]} vectors for {len(batch)} inputs"
+                )
+            if vecs.shape[1] != self.dim:
+                raise RuntimeError(
+                    f"GLM returned {vecs.shape[1]}-dim vectors, expected {self.dim}"
+                )
+            out[i : i + len(batch)] = vecs
+        return out
+
     def _embed_tfidf(self, texts: list[str]) -> np.ndarray:
         if self._vectorizer is None or self._svd is None:
             raise RuntimeError("TF-IDF backend requires fit() before embed().")
@@ -178,18 +274,23 @@ class Embedder:
 
     @property
     def is_ready(self) -> bool:
-        return self._model is not None or (self._vectorizer is not None)
+        return (
+            self._model is not None
+            or self._vectorizer is not None
+            or (self.backend == "glm" and self._requests is not None)
+        )
 
     # ----------------------------------------------------------- persistence
     def save_state(self) -> None:
         """Persist the active backend/dim and (for TF-IDF) the fitted model so a
         later `search` can rebuild the exact same vector space."""
         PROCESSED_DIR.mkdir(parents=True, exist_ok=True)
+        model = self.cfg.glm_model if self.backend == "glm" else self.cfg.model_name
         STATE_META.write_text(
             json.dumps(
                 {
                     "backend": self.backend,
-                    "model_name": self.cfg.model_name,
+                    "model_name": model,
                     "dim": self.dim,
                     "normalize": self.cfg.normalize,
                 },

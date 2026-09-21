@@ -24,7 +24,7 @@ run_pipeline.py            CLI 入口（ingest / search）
 medical_rag/
   config.py                全局配置（数据库、embedding、分块、抓取）
   db.py                    pgvector 建表 + 批量写入辅助函数
-  embedder.py              sentence-transformers（默认）或 TF-IDF+LSA 回退
+  embedder.py              GLM API（推荐）/ sentence-transformers / TF-IDF+LSA 回退
   cleaners.py              HTML→文本、空白/CJK 规范化、语言识别
   chunking.py              中英文句界感知的重叠分块器
   pipeline.py              抓取 → 清洗 → 分块 → 向量化 → 入库；+ search()
@@ -77,9 +77,13 @@ medical_rag/
    | `PGVECTOR_PORT` | `5433` | 数据库端口 |
    | `PGVECTOR_DB` | `medrag` | 数据库名 |
    | `PGVECTOR_USER` / `PGVECTOR_PASSWORD` | `meduser` / `medpass` | 账号 / 密码 |
-   | `EMBED_BACKEND` | `auto` | `sentence-transformers` / `tfidf` / `auto` |
+   | `EMBED_BACKEND` | `auto` | `glm` / `sentence-transformers` / `tfidf` / `auto` |
    | `EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | HuggingFace 模型 id |
-   | `EMBED_DIM` | `512` | 向量维度（TF-IDF 路径使用） |
+   | `EMBED_DIM` | `512` | 向量维度（GLM 与 TF-IDF 路径使用） |
+   | `GLM_API_KEY` | （无） | 智谱 GLM embedding API 密钥（**必填才能用 glm 后端**） |
+   | `GLM_EMBED_MODEL` | `embedding-3` | GLM embedding 模型名 |
+   | `GLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/embeddings` | GLM API 端点 |
+   | `GLM_EMBED_BATCH` | `32` | 每次 API 请求携带的文本条数 |
    | `CHUNK_SIZE` | `600` | 目标分块字符数 |
    | `CHUNK_OVERLAP` | `120` | 相邻分块重叠字符数 |
    | `CRAWL_MAX_PAGES` | `15` | 每个站点最多抓取文档数 |
@@ -89,11 +93,30 @@ medical_rag/
    > 可将 `EMBED_MODEL` 设为 `sentence-transformers/all-MiniLM-L6-v2`（384 维），或
    > 使用多语种模型如 `paraphrase-multilingual-MiniLM-L12-v2`。
 
+4. **GLM embedding（推荐）。** `glm` 后端调用智谱 AI 的 embedding API
+   （默认 `embedding-3`，512 维），无需本地 ML 栈。API key 属于敏感信息，
+   **不要写进代码提交到仓库**——放在环境变量或项目根目录的 `.env` 文件中
+   （`.env` 已被 `.gitignore` 忽略，程序启动时会自动加载）：
+
+   ```bash
+   cat > .env <<'EOF'
+   GLM_API_KEY=你的密钥
+   EOF
+   # 或者直接导出环境变量：
+   export GLM_API_KEY=你的密钥
+   ```
+
+   `EMBED_BACKEND=auto`（默认）在检测到 `GLM_API_KEY` 时会优先使用 GLM，
+   否则依次回退到 sentence-transformers、TF-IDF。
+
 ## 使用方法
 
 ```bash
-# 抓取全部 5 个站点并入库（默认 embedding 后端）。
+# 抓取全部 5 个站点并入库（有 GLM_API_KEY 时默认走 GLM embedding）。
 python run_pipeline.py ingest
+
+# 显式指定 GLM embedding 后端：
+python run_pipeline.py ingest --embed-backend glm
 
 # 只抓取 WHO，减少页面数：
 python run_pipeline.py ingest --sites who --max-pages 8
@@ -119,10 +142,11 @@ python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
   过滤垃圾字节；用一个轻量的 CJK 比例启发式判定 `zh` / `en`。
 - **分块**（`chunking.py`）：按句界切分（支持中文 `。！？`），贪心填充到
   `CHUNK_SIZE`，并将上一块的尾部 `CHUNK_OVERLAP` 带入下一块，舍弃过短块后重新编号。
-- **向量化**（`embedder.py`）：默认使用 `sentence-transformers`（语义向量）；当
-  ML 依赖不可用时自动回退到 `TF-IDF + LSA`（scikit-learn）。两种后端都会做 L2 归一化
-  并补齐到配置的宽度，保证 `vector(N)` 列一致。当前生效的后端与拟合好的模型会被持久化
-  到 `data/processed/`，使 `search` 复用同一向量空间。
+- **向量化**（`embedder.py`）：默认优先调用 GLM embedding API（远程语义向量，
+  需 `GLM_API_KEY`）；无 key 时回退到 `sentence-transformers`（本地语义向量），
+  ML 依赖仍不可用时最终回退到 `TF-IDF + LSA`（scikit-learn）。所有后端都会做 L2
+  归一化并补齐到配置的宽度，保证 `vector(N)` 列一致。当前生效的后端、模型与维度会
+  被持久化到 `data/processed/`，使 `search` 复用同一向量空间。
 - **入库**（`db.py` + `pipeline.py`）：每个页面/文章对应一条 `documents`（含来源信息），
   对应多条 `chunks`（各自携带向量）。整个运行**幂等** —— 已入库的 `(source, source_url)`
   在下次运行时会被跳过。

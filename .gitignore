@@ -8,6 +8,9 @@ venv/
 .idea/
 *.swp
 
+# Secrets (GLM API key etc.) — keep out of version control
+.env
+
 # Downloaded crawl/sitemap caches
 data/raw/
 data/processed/

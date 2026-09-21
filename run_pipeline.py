@@ -41,7 +41,8 @@ def build_parser() -> argparse.ArgumentParser:
                      help="max documents per site (default from config)")
     ing.add_argument("--recreate", action="store_true",
                      help="drop and recreate the schema before ingesting")
-    ing.add_argument("--embed-backend", choices=["sentence-transformers", "tfidf", "auto"],
+    ing.add_argument("--embed-backend",
+                     choices=["glm", "sentence-transformers", "tfidf", "auto"],
                      default=None, help="override the embedding backend")
 
     q = sub.add_parser("search", help="Run a similarity search")

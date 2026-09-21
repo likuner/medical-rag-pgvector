@@ -17,6 +17,29 @@ RAW_DIR = ROOT / "data" / "raw"
 PROCESSED_DIR = ROOT / "data" / "processed"
 
 
+def _load_dotenv() -> None:
+    """Load KEY=VALUE pairs from ROOT/.env into os.environ (no override).
+
+    Keeps secrets such as the GLM API key out of the repository while still
+    exposing them as environment variables. Must run before the dataclass
+    field defaults below snapshot the environment.
+    """
+    env_path = ROOT / ".env"
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, _, value = line.partition("=")
+        key = key.strip()
+        if key and key not in os.environ:
+            os.environ[key] = value.strip().strip("'\"")
+
+
+_load_dotenv()
+
+
 def _ensure_dirs() -> None:
     for d in (RAW_DIR, PROCESSED_DIR):
         d.mkdir(parents=True, exist_ok=True)
@@ -46,16 +69,27 @@ class DBConfig:
 # --------------------------------------------------------------------------- #
 @dataclass
 class EmbeddingConfig:
-    # Backend to use: "sentence-transformers" | "tfidf" | "auto".
-    # "auto" tries the sentence-transformers model and falls back to TF-IDF.
+    # Backend to use: "sentence-transformers" | "tfidf" | "glm" | "auto".
+    # "auto" prefers the GLM API when GLM_API_KEY is set, then tries the
+    # sentence-transformers model, and finally falls back to TF-IDF.
     backend: str = os.getenv("EMBED_BACKEND", "auto")
     # The sentence-transformers model id (HuggingFace hub or local path).
     model_name: str = os.getenv(
         "EMBED_MODEL", "BAAI/bge-small-zh-v1.5"
     )
     # Output dimensionality. MUST match the model for sentence-transformers
-    # (bge-small-zh-v1.5 -> 512). The tfidf backend always reduces to this.
+    # (bge-small-zh-v1.5 -> 512). The tfidf backend always reduces to this,
+    # and the glm backend passes it as the API `dimensions` parameter.
     dim: int = int(os.getenv("EMBED_DIM", "512"))
+    # ---- GLM (Zhipu AI) embedding API ------------------------------------ #
+    # The API key is a secret: keep it in the environment / a git-ignored
+    # .env file, never in committed code.
+    glm_api_key: str = os.getenv("GLM_API_KEY", "")
+    glm_model: str = os.getenv("GLM_EMBED_MODEL", "embedding-3")
+    glm_base_url: str = os.getenv(
+        "GLM_BASE_URL", "https://open.bigmodel.cn/api/paas/v4/embeddings"
+    )
+    glm_batch_size: int = int(os.getenv("GLM_EMBED_BATCH", "32"))
     # For TF-IDF fallback: number of features and LSA components.
     tfidf_max_features: int = 200_000
     tfidf_lsa_components: int | None = None  # None -> use `dim`
