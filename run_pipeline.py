@@ -3,11 +3,11 @@
 
 Examples
 --------
-# Ingest all five sites (bounded crawls):
+# Ingest all five Chinese sites (bounded crawls):
 python run_pipeline.py ingest
 
-# Ingest a single site, e.g. only WHO:
-python run_pipeline.py ingest --sites who --max-pages 8
+# Ingest a single site, e.g. only WHO 中文:
+python run_pipeline.py ingest --sites who_zh --max-pages 8
 
 # Rebuild the DB from scratch:
 python run_pipeline.py ingest --recreate
@@ -16,7 +16,7 @@ python run_pipeline.py ingest --recreate
 python run_pipeline.py ingest --embed-backend tfidf
 
 # Semantic search over what's stored:
-python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
+python run_pipeline.py search --query "2型糖尿病的治疗" --k 5
 """
 from __future__ import annotations
 
@@ -24,9 +24,8 @@ import argparse
 import logging
 import sys
 
+from medical_rag.crawling.registry import ALL_SITES
 from medical_rag.pipeline import run, search
-
-ALL_SITES = ["pubmed", "medlineplus", "who", "nhs", "msd"]
 
 
 def build_parser() -> argparse.ArgumentParser:

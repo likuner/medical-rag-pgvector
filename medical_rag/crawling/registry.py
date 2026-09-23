@@ -1,28 +1,28 @@
-"""Registry of available site crawlers."""
+"""Registry of available site crawlers (中文医学数据源)."""
 from __future__ import annotations
 
 import logging
 from typing import Type
 
 from ..config import CrawlConfig
+from .a_hospital import AHospitalCrawler
 from .base import BaseCrawler
-from .medlineplus import MedlinePlusCrawler
-from .msd import MSDCrawler
-from .nhs import NHSCrawler
-from .pubmed import PubMedCrawler
-from .who import WHOCrawler
+from .jk39 import Jk39Crawler
+from .msd_cn import MSDCnCrawler
+from .who_zh import WHOZhCrawler
+from .xywy import XywyCrawler
 
 log = logging.getLogger(__name__)
 
 CRAWLERS: dict[str, Type[BaseCrawler]] = {
-    "pubmed": PubMedCrawler,
-    "medlineplus": MedlinePlusCrawler,
-    "who": WHOCrawler,
-    "nhs": NHSCrawler,
-    "msd": MSDCrawler,
+    "who_zh": WHOZhCrawler,
+    "msd_cn": MSDCnCrawler,
+    "a_hospital": AHospitalCrawler,
+    "jk39": Jk39Crawler,
+    "xywy": XywyCrawler,
 }
 
-ALL_SITES = ["pubmed", "medlineplus", "who", "nhs", "msd"]
+ALL_SITES = ["who_zh", "msd_cn", "a_hospital", "jk39", "xywy"]
 
 
 def get_crawler(key: str, cfg: CrawlConfig) -> BaseCrawler:

@@ -58,7 +58,7 @@ class BaseCrawler(ABC):
         self.session.headers.update(
             {
                 "User-Agent": cfg.user_agent,
-                "Accept-Language": "en-US,en;q=0.9,zh-CN;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
                 "Accept": "text/html,application/xhtml+xml,application/json;q=0.9,*/*;q=0.8",
             }
         )

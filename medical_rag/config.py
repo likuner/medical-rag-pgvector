@@ -79,8 +79,9 @@ class EmbeddingConfig:
     )
     # Output dimensionality. MUST match the model for sentence-transformers
     # (bge-small-zh-v1.5 -> 512). The tfidf backend always reduces to this,
-    # and the glm backend passes it as the API `dimensions` parameter.
-    dim: int = int(os.getenv("EMBED_DIM", "512"))
+    # and the glm backend passes it as the API `dimensions` parameter
+    # (embedding-3 supports 256-2048; 1024 by default here).
+    dim: int = int(os.getenv("EMBED_DIM", "1024"))
     # ---- GLM (Zhipu AI) embedding API ------------------------------------ #
     # The API key is a secret: keep it in the environment / a git-ignored
     # .env file, never in committed code.
@@ -108,9 +109,12 @@ class EmbeddingConfig:
 # --------------------------------------------------------------------------- #
 @dataclass
 class ChunkConfig:
-    size: int = int(os.getenv("CHUNK_SIZE", "600"))        # target chars
-    overlap: int = int(os.getenv("CHUNK_OVERLAP", "120"))  # overlapping chars
-    min_chunk: int = 80  # drop chunks shorter than this after cleaning
+    # Units are "tokens" as counted by the chunker's tokenizer (CJK char == 1,
+    # latin word == 1), passed to LlamaIndex SentenceSplitter as chunk_size /
+    # chunk_overlap.
+    size: int = int(os.getenv("CHUNK_SIZE", "512"))        # target tokens
+    overlap: int = int(os.getenv("CHUNK_OVERLAP", "100"))  # overlapping tokens
+    min_chunk: int = 80  # drop chunks shorter than this (chars) after cleaning
 
 
 # --------------------------------------------------------------------------- #

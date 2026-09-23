@@ -27,7 +27,7 @@ CREATE EXTENSION IF NOT EXISTS vector;
 
 CREATE TABLE IF NOT EXISTS documents (
     id            bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-    source        text        NOT NULL,           -- site key, e.g. 'pubmed'
+    source        text        NOT NULL,           -- site key, e.g. 'who_zh'
     source_name   text        NOT NULL,           -- human readable site name
     source_url    text        NOT NULL,           -- canonical page URL
     title         text,

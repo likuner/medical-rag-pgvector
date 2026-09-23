@@ -1,21 +1,21 @@
-# 医学 RAG 爬虫 → pgvector
+# 医学 RAG 爬虫 → pgvector（中文数据源）
 
-一个端到端的医学数据流水线：**抓取 5 个医学网站 → 清洗 → 分块 → 向量化 →
-写入 PostgreSQL / pgvector**。每一条记录都会保存原始信息（来源、URL、页码、
-元数据）、分块文本及其向量，可直接用于语义检索（RAG）。
+一个端到端的医学数据流水线：**抓取 5 个中文医学网站 → 清洗 → 分块 → 向量化 →
+写入 PostgreSQL / pgvector**。每一条记录都会保存原始信息（来源、URL、元数据）、
+分块文本及其向量，可直接用于语义检索（RAG）。
 
 ## 数据来源
 
-| key          | 站点                         | 内容                                       | 方式          |
-|--------------|------------------------------|-------------------------------------------|---------------|
-| `pubmed`     | PubMed / NCBI E-utilities    | 文献摘要 + 元数据（PMID / DOI / 作者 / 期刊） | REST API      |
-| `medlineplus`| MedlinePlus（医学百科）       | 疾病 / 症状 / 治疗概述                      | HTML 抓取     |
-| `who`        | 世界卫生组织实况报道           | 公共卫生事实页                             | HTML 抓取     |
-| `nhs`        | 英国 NHS Health A-Z          | 疾病着陆页 + 子页面                        | HTML 抓取     |
-| `msd`        | 默沙东诊疗手册（专业版）       | 临床专题文章                               | HTML 抓取 + sitemap |
+| key           | 站点                        | 内容                          | 方式                  |
+|---------------|-----------------------------|-------------------------------|-----------------------|
+| `who_zh`      | WHO 中文实况报道             | 公共卫生事实页（中文）          | HTML 抓取             |
+| `msd_cn`      | 默沙东诊疗手册（中文专业版）   | 临床专题文章                   | HTML 抓取 + sitemap   |
+| `a_hospital`  | A+医学百科                   | 疾病/医学概念百科词条           | HTML 抓取             |
+| `jk39`        | 39健康疾病百科               | 疾病主页 + 病因/症状/预防/就诊子栏目 | HTML 抓取        |
+| `xywy`        | 寻医问药疾病库               | 疾病概述（页面为 GBK 编码）      | HTML 抓取             |
 
-所有爬虫都保持克制：遵守 `robots.txt`、带随机抖动的限速；其中 MSD 单独遵循站点
-的 `Crawl-delay: 5` 指令。
+所有爬虫都保持克制：遵守 `robots.txt`、带随机抖动的限速；其中默沙东中文站单独
+遵循站点的 `Crawl-delay: 5` 指令。
 
 ## 项目结构
 
@@ -30,7 +30,7 @@ medical_rag/
   pipeline.py              抓取 → 清洗 → 分块 → 向量化 → 入库；+ search()
   crawling/
     base.py                BaseCrawler、RawDoc、HTTP/robots 工具
-    pubmed.py  medlineplus.py  who.py  nhs.py  msd.py
+    who_zh.py  msd_cn.py  a_hospital.py  jk39.py  xywy.py
     registry.py            站点 key → 爬虫类的映射
 ```
 
@@ -79,13 +79,13 @@ medical_rag/
    | `PGVECTOR_USER` / `PGVECTOR_PASSWORD` | `meduser` / `medpass` | 账号 / 密码 |
    | `EMBED_BACKEND` | `auto` | `glm` / `sentence-transformers` / `tfidf` / `auto` |
    | `EMBED_MODEL` | `BAAI/bge-small-zh-v1.5` | HuggingFace 模型 id |
-   | `EMBED_DIM` | `512` | 向量维度（GLM 与 TF-IDF 路径使用） |
+   | `EMBED_DIM` | `1024` | 向量维度（GLM 与 TF-IDF 路径使用；GLM embedding-3 支持 256–2048） |
    | `GLM_API_KEY` | （无） | 智谱 GLM embedding API 密钥（**必填才能用 glm 后端**） |
    | `GLM_EMBED_MODEL` | `embedding-3` | GLM embedding 模型名 |
    | `GLM_BASE_URL` | `https://open.bigmodel.cn/api/paas/v4/embeddings` | GLM API 端点 |
    | `GLM_EMBED_BATCH` | `32` | 每次 API 请求携带的文本条数 |
-   | `CHUNK_SIZE` | `600` | 目标分块字符数 |
-   | `CHUNK_OVERLAP` | `120` | 相邻分块重叠字符数 |
+   | `CHUNK_SIZE` | `512` | 目标分块 token 数（LlamaIndex SentenceSplitter） |
+   | `CHUNK_OVERLAP` | `100` | 相邻分块重叠 token 数 |
    | `CRAWL_MAX_PAGES` | `15` | 每个站点最多抓取文档数 |
    | `CRAWL_DELAY` | `1.0` | 两次请求之间的间隔（秒） |
 
@@ -112,14 +112,11 @@ medical_rag/
 ## 使用方法
 
 ```bash
-# 抓取全部 5 个站点并入库（有 GLM_API_KEY 时默认走 GLM embedding）。
+# 抓取全部 5 个中文站点并入库（有 GLM_API_KEY 时默认走 GLM embedding）。
 python run_pipeline.py ingest
 
-# 显式指定 GLM embedding 后端：
-python run_pipeline.py ingest --embed-backend glm
-
-# 只抓取 WHO，减少页面数：
-python run_pipeline.py ingest --sites who --max-pages 8
+# 只抓取 WHO 中文，减少页面数：
+python run_pipeline.py ingest --sites who_zh --max-pages 8
 
 # 强制使用轻量的 TF-IDF 向量化：
 python run_pipeline.py ingest --embed-backend tfidf
@@ -128,8 +125,8 @@ python run_pipeline.py ingest --embed-backend tfidf
 python run_pipeline.py ingest --recreate
 
 # 对库内分块做语义检索：
-python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
-中文查询同样支持，例如：python run_pipeline.py search --query "2型糖尿病的治疗" --k 5
+python run_pipeline.py search --query "2型糖尿病的治疗" --k 5
+英文查询同样支持，例如：python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
 ```
 
 `search` 命令会返回最匹配的分块，包含分块文本、来源 URL、标题以及余弦
@@ -140,8 +137,11 @@ python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
 - **清洗**（`cleaners.py`）：剔除 script/style/nav 等样板内容，优先取
   `<article>` / `<main>` / `#content` 区域，压缩空白、还原 HTML 实体、去除重复行、
   过滤垃圾字节；用一个轻量的 CJK 比例启发式判定 `zh` / `en`。
-- **分块**（`chunking.py`）：按句界切分（支持中文 `。！？`），贪心填充到
-  `CHUNK_SIZE`，并将上一块的尾部 `CHUNK_OVERLAP` 带入下一块，舍弃过短块后重新编号。
+- **分块**（`chunking.py`）：基于 **LlamaIndex `SentenceSplitter`**——中文句界感知
+  （`。！？；`）、按 token 预算贪心填充、相邻块携带重叠。自定义中文 tokenizer
+  （中文 1 字 = 1 token、英文 1 词 = 1 token）避免了 tiktoken 运行时下载，
+  国内网络离线可用。`CHUNK_SIZE=512` / `CHUNK_OVERLAP=100` 单位为该 token 计数，
+  过短块（< 80 字符）会被丢弃并重新编号。
 - **向量化**（`embedder.py`）：默认优先调用 GLM embedding API（远程语义向量，
   需 `GLM_API_KEY`）；无 key 时回退到 `sentence-transformers`（本地语义向量），
   ML 依赖仍不可用时最终回退到 `TF-IDF + LSA`（scikit-learn）。所有后端都会做 L2
@@ -153,9 +153,10 @@ python run_pipeline.py search --query "treatment for type 2 diabetes" --k 5
 
 ## 备注
 
-- 公开 API（PubMed E-utilities）设 `respect_robots = False`；HTML 站点开启。所有站点
-  均使用礼貌的抓取间隔。
-- PubMed 会把检索结果**页码**写入 `documents.page_number`；其他爬虫会把额外的来源信息
-  （PMID、DOI、作者、所属专题分类等）写入 `documents.doc_metadata`。
-- 抓取到的原始页面缓存于 `data/raw/`，MSD 的 sitemap 缓存于 `data/processed/`，
-  以避免每次运行都重复下载约 10 MB 的数据。
+- 5 个站点均为 HTML 抓取且遵守 `robots.txt`，全部使用礼貌的抓取间隔；默沙东中文站
+  遵循其 `Crawl-delay: 5`。候选站 wiki8.com（医学百科）因域名失效被排除。
+- 各爬虫会把额外的来源信息（实况报道 slug、疾病拼音码/ID、所属科室分类等）写入
+  `documents.doc_metadata`；jk39 会把疾病四个子栏目页合并为一篇文档。
+- 寻医问药（xywy）页面为 **GBK 编码**，爬虫内部已显式按 GBK 解码。
+- 抓取到的原始页面缓存于 `data/raw/`，默沙东中文站的 sitemap 缓存于
+  `data/processed/`，以避免每次运行都重复下载约 10 MB 的数据。
